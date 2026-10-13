@@ -1,0 +1,10 @@
+.git
+node_modules
+scripts
+public
+package.json
+package-lock.json
+README.md
+LICENSE
+wrangler.jsonc
+*.py

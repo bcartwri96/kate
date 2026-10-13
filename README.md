@@ -20,7 +20,7 @@ To deploy:
 npm run deploy
 ```
 
-`wrangler.jsonc` configures the project root as the Worker Static Assets directory and excludes source/configuration files. The browser downloads the model from the Worker once and caches it in IndexedDB on the user's device; the app does not upload microphone audio or transcript text.
+`wrangler.jsonc` configures the project root as an assets-only Worker Static Assets directory. `.assetsignore` keeps source and configuration files out of the public upload. The browser downloads the model from the Worker once and caches it in IndexedDB on the user's device; the app does not upload microphone audio or transcript text.
 
 ## Model/runtime notes
 
