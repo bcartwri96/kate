@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hush-transcription",
+  "compatibility_date": "2026-10-13",
+  "assets": {
+    "directory": ".",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": false,
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "exclude": [".git", ".git/**", "node_modules", "node_modules/**", "scripts", "scripts/**", "public", "public/**", "package.json", "package-lock.json", "README.md", "LICENSE", "wrangler.jsonc", "**/*.py"]
+  }
+}

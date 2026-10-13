@@ -1,0 +1,14 @@
+{
+  "name": "hush-transcription",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup:needle": "python3 scripts/fetch-needle-wasm.py",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
