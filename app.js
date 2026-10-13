@@ -3,6 +3,7 @@ const ENGINE_BASE = '/needle';
 const DB_NAME = 'hush-local';
 const MODEL_KEY = 'whistle-v1';
 const loadingText = document.querySelector('#loadingText');
+const appShell = document.querySelector('#appShell');
 const progressTrack = document.querySelector('#progressTrack');
 const progressFill = document.querySelector('#progressFill');
 const retryButton = document.querySelector('#retryButton');
@@ -14,7 +15,7 @@ const AUDIO_RATE = 16000;
 const FAST_CHUNK_SAMPLES = AUDIO_RATE / 2;
 const SAFE_CHUNK_SAMPLES = AUDIO_RATE;
 
-let engine;
+let inferenceWorker;
 let captureStream;
 let audioContext;
 let audioNode;
@@ -22,7 +23,7 @@ let sourceNode;
 let frames = [];
 let samplesBuffered = 0;
 let streamChunkSamples = FAST_CHUNK_SAMPLES;
-let streamTimer;
+let inferenceBusy = false;
 let confirmedText = '';
 let pendingText = '';
 let archivedText = loadArchivedText();
@@ -130,33 +131,6 @@ async function readResponse(response) {
   return new Blob(parts, { type: 'application/octet-stream' });
 }
 
-async function loadEngineScript() {
-  if (window.createNeedle) return;
-  await new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = `${ENGINE_BASE}/needle.js`;
-    script.onload = resolve;
-    script.onerror = () => reject(new Error('Could not load the Needle WASM runtime.'));
-    document.head.append(script);
-  });
-  if (!window.createNeedle) throw new Error('Needle WASM runtime did not initialize.');
-}
-
-function loadCact(module, bytes) {
-  const ptr = module._malloc(bytes.length);
-  if (!ptr) throw new Error('Not enough memory to load Whistle.');
-  try {
-    module.HEAPU8.set(bytes, ptr);
-    const result = module._needle_load(ptr, BigInt(bytes.length));
-    if (result < 0) {
-      const detail = module.ccall('needle_last_error', 'string', [], []);
-      throw new Error(detail || 'Needle could not load Whistle.');
-    }
-  } finally {
-    module._free(ptr);
-  }
-}
-
 async function ensureModel() {
   loadingText.textContent = 'Checking this device...';
   progressFill.classList.add('indeterminate');
@@ -173,41 +147,31 @@ async function ensureModel() {
   loadingText.textContent = 'Loading speech engine...';
   progressFill.classList.add('indeterminate');
   progressFill.style.width = '';
-  await loadEngineScript();
-  engine = await window.createNeedle({ locateFile: name => `${ENGINE_BASE}/${name}` });
-  const bytes = new Uint8Array(await model.arrayBuffer());
-  loadCact(engine, bytes);
-}
-
-function parseApiResult(result, bufferPtr, module) {
-  if (result < 0) {
-    const detail = module.ccall('needle_last_error', 'string', [], []);
-    throw new Error(detail || 'Transcription failed.');
-  }
-  return JSON.parse(module.UTF8ToString(bufferPtr));
-}
-
-function streamProcess(samples) {
-  const inputPtr = engine._malloc(samples.byteLength);
-  const outputPtr = engine._malloc(65536);
-  if (!inputPtr || !outputPtr) throw new Error('Not enough memory to process audio.');
-  try {
-    new Float32Array(engine.HEAPU8.buffer).set(samples, inputPtr >> 2);
-    const count = engine.ccall('needle_stream_transcribe_process', 'number', ['number', 'number', 'string', 'string', 'number', 'number'], [inputPtr, samples.length, 'en', null, outputPtr, 65536]);
-    return parseApiResult(count, outputPtr, engine);
-  } finally {
-    engine._free(inputPtr);
-    engine._free(outputPtr);
-  }
-}
-
-function streamStop() {
-  const outputPtr = engine._malloc(65536);
-  if (!outputPtr) return null;
-  try {
-    const count = engine._needle_stream_transcribe_stop(outputPtr, 65536);
-    return parseApiResult(count, outputPtr, engine);
-  } finally { engine._free(outputPtr); }
+  inferenceWorker = new Worker('/inference-worker.js');
+  let workerReady = false;
+  await new Promise((resolve, reject) => {
+    inferenceWorker.onmessage = event => {
+      const message = event.data;
+      if (message.type === 'ready') { workerReady = true; resolve(); }
+      else if (message.type === 'error') {
+        const error = new Error(message.error);
+        if (workerReady) showError(error);
+        else reject(error);
+      }
+      else if (message.type === 'result') {
+        inferenceBusy = false;
+        appendStreamResult(message.data);
+        if (samplesBuffered >= streamChunkSamples) drainAudio();
+      }
+    };
+    inferenceWorker.onerror = () => {
+      const error = new Error('The speech engine stopped unexpectedly.');
+      if (workerReady) showError(error);
+      else reject(error);
+    };
+    const bytes = model.arrayBuffer();
+    bytes.then(buffer => inferenceWorker.postMessage({ type: 'init', model: buffer }, [buffer]), reject);
+  });
 }
 
 function appendStreamResult(data) {
@@ -221,29 +185,15 @@ function appendStreamResult(data) {
   renderText();
 }
 
-async function drainAudio() {
-  if (!engine || samplesBuffered === 0) return;
+function drainAudio() {
+  if (!inferenceWorker || inferenceBusy || samplesBuffered === 0) return;
   const all = new Float32Array(samplesBuffered);
   let offset = 0;
   for (const frame of frames) { all.set(frame, offset); offset += frame.length; }
   frames = [];
   samplesBuffered = 0;
-  // Keep this drain's boundaries stable if the model changes cadence midway.
-  const chunkSamples = streamChunkSamples;
-  // Process short slices as they arrive so stable and pending text can refresh
-  // faster than the C API's 30-second per-call upper bound.
-  for (let start = 0; start < all.length; start += chunkSamples) {
-    const startedAt = performance.now();
-    const data = streamProcess(all.subarray(start, Math.min(start + chunkSamples, all.length)));
-    data.wall_ms = performance.now() - startedAt;
-    appendStreamResult(data);
-  }
-}
-
-function makeWorklet() {
-  const source = `class Capture extends AudioWorkletProcessor{constructor(){super();this.ratio=sampleRate/16000;this.next=0;this.out=[]}process(inputs){const a=inputs[0]?.[0];if(!a)return true;for(let i=0;i<a.length;i++){if(i>=this.next){this.out.push(a[i]);this.next+=this.ratio}}this.next-=a.length;if(this.out.length>=1600){this.port.postMessage(new Float32Array(this.out.splice(0,1600)))}return true}}registerProcessor('hush-capture',Capture);`;
-  const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-  return audioContext.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+  inferenceBusy = true;
+  inferenceWorker.postMessage({ type: 'audio', samples: all }, [all.buffer]);
 }
 
 async function startListening() {
@@ -258,12 +208,13 @@ async function startListening() {
     if (!pcm?.length) return;
     frames.push(pcm);
     samplesBuffered += pcm.length;
-    if (samplesBuffered >= streamChunkSamples) drainAudio().catch(showError);
+    if (samplesBuffered >= streamChunkSamples) drainAudio();
   };
   sourceNode.connect(audioNode);
   loadingText.textContent = 'Listening...';
   progressTrack.hidden = true;
   liveTranscript.hidden = false;
+  appShell.classList.add('is-listening');
 }
 
 async function boot() {
@@ -274,12 +225,16 @@ async function boot() {
 }
 
 function stopListening() {
-  clearInterval(streamTimer);
   captureStream?.getTracks().forEach(track => track.stop());
   sourceNode?.disconnect();
   audioNode?.disconnect();
   if (audioContext && audioContext.state !== 'closed') audioContext.close();
   captureStream = audioContext = audioNode = sourceNode = null;
+  inferenceWorker?.terminate();
+  inferenceWorker = null;
+  inferenceBusy = false;
+  frames = [];
+  samplesBuffered = 0;
 }
 
 function showError(error) {

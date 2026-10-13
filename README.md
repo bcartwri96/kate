@@ -30,4 +30,4 @@ npm run deploy
 
 ## Runtime flow
 
-The app loads the official Emscripten bundle, passes Whistle bytes to `needle_load`, captures microphone audio through an AudioWorklet, resamples it to 16 kHz mono, and feeds adaptive half-second/one-second chunks to `needle_stream_transcribe_process`. Confirmed words and the pending tail are rendered locally and transcript text is kept in browser storage. The browser adapter targets the C exports documented in `needle/needle.h` and present in the downloaded `needle.js` bundle.
+The app loads the official Emscripten bundle in a dedicated Web Worker, passes Whistle bytes to `needle_load`, captures microphone audio through an AudioWorklet, resamples it to 16 kHz mono, and feeds adaptive half-second/one-second chunks to `needle_stream_transcribe_process`. This keeps model inference off Safari's UI thread. Confirmed words and the pending tail are rendered locally and transcript text is kept in browser storage. The browser adapter targets the C exports documented in `needle/needle.h` and present in the downloaded `needle.js` bundle.
