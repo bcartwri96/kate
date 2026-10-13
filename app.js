@@ -19,7 +19,6 @@ let captureStream;
 let audioContext;
 let audioNode;
 let sourceNode;
-let englishLanguagePtr;
 let frames = [];
 let samplesBuffered = 0;
 let streamChunkSamples = FAST_CHUNK_SAMPLES;
@@ -176,7 +175,6 @@ async function ensureModel() {
   progressFill.style.width = '';
   await loadEngineScript();
   engine = await window.createNeedle({ locateFile: name => `${ENGINE_BASE}/${name}` });
-  englishLanguagePtr = engine.allocateUTF8('en');
   const bytes = new Uint8Array(await model.arrayBuffer());
   loadCact(engine, bytes);
 }
@@ -192,10 +190,10 @@ function parseApiResult(result, bufferPtr, module) {
 function streamProcess(samples) {
   const inputPtr = engine._malloc(samples.byteLength);
   const outputPtr = engine._malloc(65536);
-  if (!inputPtr || !outputPtr || !englishLanguagePtr) throw new Error('Not enough memory to process audio.');
+  if (!inputPtr || !outputPtr) throw new Error('Not enough memory to process audio.');
   try {
     new Float32Array(engine.HEAPU8.buffer).set(samples, inputPtr >> 2);
-    const count = engine._needle_stream_transcribe_process(inputPtr, samples.length, englishLanguagePtr, 0, outputPtr, 65536);
+    const count = engine.ccall('needle_stream_transcribe_process', 'number', ['number', 'number', 'string', 'string', 'number', 'number'], [inputPtr, samples.length, 'en', null, outputPtr, 65536]);
     return parseApiResult(count, outputPtr, engine);
   } finally {
     engine._free(inputPtr);
