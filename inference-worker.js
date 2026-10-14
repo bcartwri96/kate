@@ -2,6 +2,18 @@ importScripts('/needle/needle.js');
 
 let engine;
 
+async function fetchWasmBinary() {
+  const response = await fetch('/needle/needle.wasm', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`Could not load Needle WASM (${response.status}).`);
+  const contentType = response.headers.get('content-type') || 'unknown content type';
+  const bytes = await response.arrayBuffer();
+  const signature = new Uint8Array(bytes, 0, Math.min(4, bytes.byteLength));
+  if (signature.length !== 4 || signature[0] !== 0 || signature[1] !== 0x61 || signature[2] !== 0x73 || signature[3] !== 0x6d) {
+    throw new Error(`Needle WASM URL returned non-WASM data (${contentType}); refresh the app to update its cached files.`);
+  }
+  return bytes;
+}
+
 function readResult(result, outputPtr) {
   if (result < 0) {
     const detail = engine.ccall('needle_last_error', 'string', [], []);
@@ -14,7 +26,8 @@ self.onmessage = async event => {
   const message = event.data;
   try {
     if (message.type === 'init') {
-      engine = await self.createNeedle({ locateFile: name => `/needle/${name}` });
+      const wasmBinary = await fetchWasmBinary();
+      engine = await self.createNeedle({ wasmBinary, locateFile: name => `/needle/${name}` });
       const model = new Uint8Array(message.model);
       const modelPtr = engine._malloc(model.length);
       if (!modelPtr) throw new Error('Not enough memory to load Whistle.');

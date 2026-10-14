@@ -1,5 +1,4 @@
 const MODEL_URL = '/needle/whistle.cact';
-const ENGINE_BASE = '/needle';
 const DB_NAME = 'hush-local';
 const MODEL_KEY = 'whistle-v1';
 const loadingText = document.querySelector('#loadingText');
