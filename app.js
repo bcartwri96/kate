@@ -200,20 +200,36 @@ async function startListening() {
   captureStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   audioContext = new AudioContext();
   await audioContext.audioWorklet.addModule('/audio-worklet.js');
+  if (audioContext.state !== 'running') await audioContext.resume();
+  if (audioContext.state !== 'running') throw new Error('Safari paused microphone processing. Tap Try again to resume.');
   sourceNode = audioContext.createMediaStreamSource(captureStream);
-  audioNode = new AudioWorkletNode(audioContext, 'pcm-capture');
+  audioNode = new AudioWorkletNode(audioContext, 'pcm-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+  let receivedAudio = false;
+  let resolveFirstAudio;
+  const firstAudio = new Promise(resolve => { resolveFirstAudio = resolve; });
   audioNode.port.onmessage = event => {
     const pcm = event.data?.samples;
     if (!pcm?.length) return;
+    if (!receivedAudio) {
+      receivedAudio = true;
+      loadingText.textContent = 'Listening...';
+      progressTrack.hidden = true;
+      liveTranscript.hidden = false;
+      appShell.classList.add('is-listening');
+      resolveFirstAudio();
+    }
     frames.push(pcm);
     samplesBuffered += pcm.length;
     if (samplesBuffered >= streamChunkSamples) drainAudio();
   };
+  audioNode.onprocessorerror = () => showError(new Error('Safari could not process microphone audio. Tap Try again.'));
   sourceNode.connect(audioNode);
-  loadingText.textContent = 'Listening...';
-  progressTrack.hidden = true;
-  liveTranscript.hidden = false;
-  appShell.classList.add('is-listening');
+  audioNode.connect(audioContext.destination);
+  loadingText.textContent = 'Starting microphone...';
+  await Promise.race([
+    firstAudio,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('No microphone audio is reaching the speech engine. Check microphone access and tap Try again.')), 5000))
+  ]);
 }
 
 async function boot() {
