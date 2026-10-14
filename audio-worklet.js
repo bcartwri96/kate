@@ -19,16 +19,19 @@ class PcmCapture extends AudioWorkletProcessor {
     if ((this.blocks & 127) === 0) this.port.postMessage({ type: 'diagnostic', blocks: this.blocks, inputChannels, emitted: this.emitted });
     if (!input) return true;
     for (let i = 0; i < input.length; i++) {
-      if (i >= this.nextSample) { this.buffer[this.buffered++] = input[i]; this.nextSample += this.ratio; }
+      if (i >= this.nextSample) {
+        this.buffer[this.buffered++] = input[i];
+        this.nextSample += this.ratio;
+        if (this.buffered === this.buffer.length) {
+          const samples = this.buffer;
+          this.buffer = new Float32Array(8000);
+          this.buffered = 0;
+          this.emitted++;
+          this.port.postMessage({ samples }, [samples.buffer]);
+        }
+      }
     }
     this.nextSample -= input.length;
-    if (this.buffered === this.buffer.length) {
-      const samples = this.buffer;
-      this.buffer = new Float32Array(8000);
-      this.buffered = 0;
-      this.emitted++;
-      this.port.postMessage({ samples }, [samples.buffer]);
-    }
     return true;
   }
 }

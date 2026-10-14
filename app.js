@@ -243,7 +243,7 @@ async function startListening() {
     firstAudio,
       new Promise((_, reject) => {
         timeoutId = setTimeout(() => reject(new Error(
-          `No microphone audio reached the speech engine (audio ${audioContext.state}; mic ${track?.readyState || 'missing'}${track?.muted ? ', muted' : ''}; worklet ${workletDiagnostics.started ? `${workletDiagnostics.blocks} blocks, ${workletDiagnostics.inputChannels} input channels` : 'not started'}). Check microphone access and try again.`
+          `No microphone audio reached the speech engine (audio ${audioContext.state}; mic ${track?.readyState || 'missing'}${track?.muted ? ', muted' : ''}; worklet ${workletDiagnostics.started ? `${workletDiagnostics.blocks} blocks, ${workletDiagnostics.inputChannels} input channels, ${workletDiagnostics.emitted} chunks` : 'not started'}). Check microphone access and try again.`
         )), 5000);
       })
     ]);
