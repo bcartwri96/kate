@@ -8,10 +8,9 @@ const progressFill = document.querySelector('#progressFill');
 const retryButton = document.querySelector('#retryButton');
 const liveTranscript = document.querySelector('#liveTranscript');
 const transcriptText = document.querySelector('#transcriptText');
-const pastLink = document.querySelector('#pastLink');
-const pastTranscript = document.querySelector('#pastTranscript');
 const clearLink = document.querySelector('#clearLink');
 const AUDIO_RATE = 16000;
+const MIN_CHUNK_RMS = 0.015;
 const FAST_CHUNK_SAMPLES = AUDIO_RATE / 2;
 const SAFE_CHUNK_SAMPLES = AUDIO_RATE;
 
@@ -29,9 +28,10 @@ let confirmedText = '';
 let pendingText = '';
 let previousWordEnd = null;
 let transcriptGeneration = 0;
-let archivedText = loadArchivedText();
 let savedText = loadSavedText();
 let followTranscript = true;
+
+try { localStorage.removeItem('hush-past'); } catch {}
 
 function updateProgress(loaded, total) {
   if (!total) {
@@ -78,26 +78,14 @@ function loadSavedText() {
   try { return localStorage.getItem('hush-transcript') || ''; } catch { return ''; }
 }
 
-function loadArchivedText() {
-  try { return localStorage.getItem('hush-past') || ''; } catch { return ''; }
-}
-
 function keepLatestWords(text, limit) {
   const matches = [...text.matchAll(/\S+/g)];
-  const words = matches.map(match => match[0]);
-  if (words.length <= limit) return [text.trim(), ''];
-  const splitAt = words.length - limit;
-  const boundary = matches[splitAt].index;
-  return [text.slice(boundary).trim(), text.slice(0, boundary).trim()];
-}
-
-function updatePast() {
-  pastTranscript.hidden = !pastTranscript.hidden;
-  pastLink.setAttribute('aria-expanded', String(!pastTranscript.hidden));
+  if (matches.length <= limit) return text.trim();
+  return text.slice(matches[matches.length - limit].index).trim();
 }
 
 function clearConversation() {
-  if (!window.confirm('Clear this conversation, including Past? Its saved transcript will be deleted from this device.')) return;
+  if (!window.confirm("You sure about this? It's unrecoverable. Ok to confirm deletion")) return;
   transcriptGeneration++;
   frames = [];
   samplesBuffered = 0;
@@ -105,10 +93,6 @@ function clearConversation() {
   pendingText = '';
   previousWordEnd = null;
   savedText = '';
-  archivedText = '';
-  pastTranscript.hidden = true;
-  pastLink.setAttribute('aria-expanded', 'false');
-  pastLink.hidden = true;
   followTranscript = true;
   liveTranscript.scrollTop = 0;
   try {
@@ -122,19 +106,12 @@ function clearConversation() {
 
 function renderText() {
   const current = [savedText, confirmedText].filter(Boolean).join(' ').trim();
-  const [confirmed, newlyArchived] = keepLatestWords(current, 500);
-  if (newlyArchived) {
-    archivedText = [archivedText, newlyArchived].filter(Boolean).join('\n').trim();
-    savedText = '';
-    confirmedText = confirmed;
-    try { localStorage.setItem('hush-past', archivedText); } catch {}
-  }
-  const all = [confirmed, pendingText].filter(Boolean).join(' ').trim();
+  confirmedText = keepLatestWords(current, 500);
+  savedText = '';
+  const all = keepLatestWords([confirmedText, pendingText].filter(Boolean).join(' ').trim(), 500);
   transcriptText.textContent = all;
   liveTranscript.hidden = !all;
-  pastLink.hidden = !archivedText;
-  pastTranscript.textContent = archivedText;
-  try { localStorage.setItem('hush-transcript', [savedText, confirmedText].filter(Boolean).join(' ').trim()); } catch {}
+  try { localStorage.setItem('hush-transcript', confirmedText); } catch {}
   if (followTranscript) liveTranscript.scrollTop = liveTranscript.scrollHeight;
 }
 
@@ -204,6 +181,11 @@ async function ensureModel() {
 }
 
 function appendStreamResult(data) {
+  if ((Number(data.rms) || 0) < MIN_CHUNK_RMS) {
+    pendingText = '';
+    renderText();
+    return;
+  }
   if (Array.isArray(data.words) && data.words.length) {
     let additions = '';
     for (const item of data.words) {
@@ -235,10 +217,13 @@ function drainAudio() {
   const all = new Float32Array(samplesBuffered);
   let offset = 0;
   for (const frame of frames) { all.set(frame, offset); offset += frame.length; }
+  let energy = 0;
+  for (let i = 0; i < all.length; i++) energy += all[i] * all[i];
+  const rms = Math.sqrt(energy / all.length);
   frames = [];
   samplesBuffered = 0;
   inferenceBusy = true;
-  inferenceWorker.postMessage({ type: 'audio', samples: all, generation: transcriptGeneration }, [all.buffer]);
+  inferenceWorker.postMessage({ type: 'audio', samples: all, rms, generation: transcriptGeneration }, [all.buffer]);
 }
 
 async function startListening() {
@@ -336,7 +321,6 @@ function showError(error) {
 }
 
 retryButton.addEventListener('click', () => boot().catch(showError));
-pastLink.addEventListener('click', event => { event.preventDefault(); updatePast(); });
 clearLink.addEventListener('click', clearConversation);
 liveTranscript.addEventListener('scroll', () => {
   const distance = liveTranscript.scrollHeight - liveTranscript.clientHeight - liveTranscript.scrollTop;
