@@ -8,6 +8,14 @@ class PcmCapture extends AudioWorkletProcessor {
     this.nextSample = 0;
     this.blocks = 0;
     this.emitted = 0;
+    this.generation = options.processorOptions?.generation || 0;
+    this.port.onmessage = event => {
+      if (event.data?.type !== 'reset') return;
+      this.generation = event.data.generation;
+      this.buffer = new Float32Array(8000);
+      this.buffered = 0;
+      this.nextSample = 0;
+    };
     this.port.postMessage({ type: 'started', sampleRate });
   }
   process(inputs, outputs) {
@@ -27,7 +35,7 @@ class PcmCapture extends AudioWorkletProcessor {
           this.buffer = new Float32Array(8000);
           this.buffered = 0;
           this.emitted++;
-          this.port.postMessage({ samples }, [samples.buffer]);
+          this.port.postMessage({ samples, generation: this.generation }, [samples.buffer]);
         }
       }
     }

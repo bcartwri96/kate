@@ -65,9 +65,28 @@ self.onmessage = async event => {
         );
         const data = readResult(result, outputPtr);
         data.wall_ms = performance.now() - startedAt;
-        self.postMessage({ type: 'result', data });
+        self.postMessage({ type: 'result', data, generation: message.generation });
       } finally {
         engine._free(inputPtr);
+        engine._free(outputPtr);
+      }
+    }
+
+    if (message.type === 'clear') {
+      const outputPtr = engine._malloc(65536);
+      if (!outputPtr) throw new Error('Not enough memory to clear the conversation.');
+      try {
+        const result = engine.ccall(
+          'needle_stream_transcribe_stop',
+          'number',
+          ['number', 'number'],
+          [outputPtr, 65536]
+        );
+        if (result < 0) {
+          const detail = engine.ccall('needle_last_error', 'string', [], []);
+          throw new Error(detail || 'Could not reset the speech stream.');
+        }
+      } finally {
         engine._free(outputPtr);
       }
     }

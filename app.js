@@ -10,11 +10,13 @@ const liveTranscript = document.querySelector('#liveTranscript');
 const transcriptText = document.querySelector('#transcriptText');
 const pastLink = document.querySelector('#pastLink');
 const pastTranscript = document.querySelector('#pastTranscript');
+const clearLink = document.querySelector('#clearLink');
 const AUDIO_RATE = 16000;
 const FAST_CHUNK_SAMPLES = AUDIO_RATE / 2;
 const SAFE_CHUNK_SAMPLES = AUDIO_RATE;
 
 let inferenceWorker;
+let inferenceReady = false;
 let captureStream;
 let audioContext;
 let audioNode;
@@ -25,6 +27,8 @@ let streamChunkSamples = FAST_CHUNK_SAMPLES;
 let inferenceBusy = false;
 let confirmedText = '';
 let pendingText = '';
+let previousWordEnd = null;
+let transcriptGeneration = 0;
 let archivedText = loadArchivedText();
 let savedText = loadSavedText();
 let followTranscript = true;
@@ -79,10 +83,12 @@ function loadArchivedText() {
 }
 
 function keepLatestWords(text, limit) {
-  const words = text.trim().split(/\s+/);
+  const matches = [...text.matchAll(/\S+/g)];
+  const words = matches.map(match => match[0]);
   if (words.length <= limit) return [text.trim(), ''];
   const splitAt = words.length - limit;
-  return [words.slice(splitAt).join(' '), words.slice(0, splitAt).join(' ')];
+  const boundary = matches[splitAt].index;
+  return [text.slice(boundary).trim(), text.slice(0, boundary).trim()];
 }
 
 function updatePast() {
@@ -90,11 +96,35 @@ function updatePast() {
   pastLink.setAttribute('aria-expanded', String(!pastTranscript.hidden));
 }
 
+function clearConversation() {
+  if (!window.confirm('Clear this conversation, including Past? Its saved transcript will be deleted from this device.')) return;
+  transcriptGeneration++;
+  frames = [];
+  samplesBuffered = 0;
+  confirmedText = '';
+  pendingText = '';
+  previousWordEnd = null;
+  savedText = '';
+  archivedText = '';
+  pastTranscript.hidden = true;
+  pastLink.setAttribute('aria-expanded', 'false');
+  pastLink.hidden = true;
+  followTranscript = true;
+  liveTranscript.scrollTop = 0;
+  try {
+    localStorage.removeItem('hush-transcript');
+    localStorage.removeItem('hush-past');
+  } catch {}
+  audioNode?.port.postMessage({ type: 'reset', generation: transcriptGeneration });
+  if (inferenceReady) inferenceWorker?.postMessage({ type: 'clear' });
+  renderText();
+}
+
 function renderText() {
   const current = [savedText, confirmedText].filter(Boolean).join(' ').trim();
   const [confirmed, newlyArchived] = keepLatestWords(current, 500);
   if (newlyArchived) {
-    archivedText = [archivedText, newlyArchived].filter(Boolean).join(' ').trim();
+    archivedText = [archivedText, newlyArchived].filter(Boolean).join('\n').trim();
     savedText = '';
     confirmedText = confirmed;
     try { localStorage.setItem('hush-past', archivedText); } catch {}
@@ -151,7 +181,7 @@ async function ensureModel() {
   await new Promise((resolve, reject) => {
     inferenceWorker.onmessage = event => {
       const message = event.data;
-      if (message.type === 'ready') { workerReady = true; resolve(); }
+      if (message.type === 'ready') { workerReady = true; inferenceReady = true; resolve(); }
       else if (message.type === 'error') {
         const error = new Error(message.error);
         if (workerReady) showError(error);
@@ -159,7 +189,7 @@ async function ensureModel() {
       }
       else if (message.type === 'result') {
         inferenceBusy = false;
-        appendStreamResult(message.data);
+        if (message.generation === transcriptGeneration) appendStreamResult(message.data);
         if (samplesBuffered >= streamChunkSamples) drainAudio();
       }
     };
@@ -174,7 +204,23 @@ async function ensureModel() {
 }
 
 function appendStreamResult(data) {
-  if (data.text) confirmedText = `${confirmedText} ${data.text}`.trim();
+  if (Array.isArray(data.words) && data.words.length) {
+    let additions = '';
+    for (const item of data.words) {
+      const word = typeof item.word === 'string' ? item.word.trim() : '';
+      if (!word) continue;
+      const start = Number(item.start);
+      const end = Number(item.end);
+      const hasPriorText = Boolean(confirmedText || additions);
+      const gap = previousWordEnd === null || !Number.isFinite(start) ? 0 : start - previousWordEnd;
+      if (hasPriorText) additions += gap >= 0.1 ? '\n' : ' ';
+      additions += word;
+      previousWordEnd = Number.isFinite(end) ? end : null;
+    }
+    confirmedText += additions;
+  } else if (data.text) {
+    confirmedText = `${confirmedText} ${data.text}`.trim();
+  }
   pendingText = data.pending || '';
   // More frequent passes reduce the wait for two-pass agreement, but can fall
   // behind on slower phones. Adapt the cadence from measured WASM call time.
@@ -192,7 +238,7 @@ function drainAudio() {
   frames = [];
   samplesBuffered = 0;
   inferenceBusy = true;
-  inferenceWorker.postMessage({ type: 'audio', samples: all }, [all.buffer]);
+  inferenceWorker.postMessage({ type: 'audio', samples: all, generation: transcriptGeneration }, [all.buffer]);
 }
 
 async function startListening() {
@@ -203,7 +249,12 @@ async function startListening() {
   if (audioContext.state !== 'running') await audioContext.resume();
   if (audioContext.state !== 'running') throw new Error('Safari paused microphone processing. Tap Try again to resume.');
   sourceNode = audioContext.createMediaStreamSource(captureStream);
-  audioNode = new AudioWorkletNode(audioContext, 'pcm-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+  audioNode = new AudioWorkletNode(audioContext, 'pcm-capture', {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+    processorOptions: { generation: transcriptGeneration }
+  });
   let receivedAudio = false;
   let resolveFirstAudio;
   let rejectFirstAudio;
@@ -218,6 +269,7 @@ async function startListening() {
       workletDiagnostics = { ...workletDiagnostics, ...event.data };
       return;
     }
+    if (event.data?.generation !== transcriptGeneration) return;
     const pcm = event.data?.samples;
     if (!pcm?.length) return;
     if (!receivedAudio) {
@@ -267,6 +319,7 @@ function stopListening() {
   captureStream = audioContext = audioNode = sourceNode = null;
   inferenceWorker?.terminate();
   inferenceWorker = null;
+  inferenceReady = false;
   inferenceBusy = false;
   frames = [];
   samplesBuffered = 0;
@@ -284,6 +337,7 @@ function showError(error) {
 
 retryButton.addEventListener('click', () => boot().catch(showError));
 pastLink.addEventListener('click', event => { event.preventDefault(); updatePast(); });
+clearLink.addEventListener('click', clearConversation);
 liveTranscript.addEventListener('scroll', () => {
   const distance = liveTranscript.scrollHeight - liveTranscript.clientHeight - liveTranscript.scrollTop;
   followTranscript = distance < 36;
