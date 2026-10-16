@@ -24,6 +24,7 @@ let frames = [];
 let samplesBuffered = 0;
 let streamChunkSamples = FAST_CHUNK_SAMPLES;
 let inferenceBusy = false;
+let nextChunkId = 0;
 let confirmedText = '';
 let pendingText = '';
 let previousWordEnd = null;
@@ -166,7 +167,10 @@ async function ensureModel() {
       }
       else if (message.type === 'result') {
         inferenceBusy = false;
-        if (message.generation === transcriptGeneration) appendStreamResult(message.data);
+        if (message.generation === transcriptGeneration) {
+          logChunkWords(message.data);
+          appendStreamResult(message.data);
+        }
         if (samplesBuffered >= streamChunkSamples) drainAudio();
       }
     };
@@ -178,6 +182,25 @@ async function ensureModel() {
     const bytes = model.arrayBuffer();
     bytes.then(buffer => inferenceWorker.postMessage({ type: 'init', model: buffer }, [buffer]), reject);
   });
+}
+
+function logChunkWords(data) {
+  const rms = Number(data.rms) || 0;
+  const displayed = rms >= MIN_CHUNK_RMS;
+  const words = Array.isArray(data.words) && data.words.length
+    ? data.words
+    : data.text ? [{ word: data.text, start: null, end: null }] : [];
+  if (!words.length) return;
+  console.groupCollapsed(`[Kate] chunk ${data.chunk} · RMS ${rms.toFixed(4)} · ${displayed ? 'displayed' : 'filtered'}`);
+  console.table(words.map(item => ({
+    word: item.word,
+    start_seconds: item.start != null && Number.isFinite(Number(item.start)) ? Number(item.start) : '',
+    end_seconds: item.end != null && Number.isFinite(Number(item.end)) ? Number(item.end) : '',
+    chunk: data.chunk,
+    rms,
+    displayed
+  })));
+  console.groupEnd();
 }
 
 function appendStreamResult(data) {
@@ -220,10 +243,11 @@ function drainAudio() {
   let energy = 0;
   for (let i = 0; i < all.length; i++) energy += all[i] * all[i];
   const rms = Math.sqrt(energy / all.length);
+  const chunk = ++nextChunkId;
   frames = [];
   samplesBuffered = 0;
   inferenceBusy = true;
-  inferenceWorker.postMessage({ type: 'audio', samples: all, rms, generation: transcriptGeneration }, [all.buffer]);
+  inferenceWorker.postMessage({ type: 'audio', samples: all, rms, chunk, generation: transcriptGeneration }, [all.buffer]);
 }
 
 async function startListening() {

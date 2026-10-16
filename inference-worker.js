@@ -66,6 +66,7 @@ self.onmessage = async event => {
         const data = readResult(result, outputPtr);
         data.wall_ms = performance.now() - startedAt;
         data.rms = message.rms;
+        data.chunk = message.chunk;
         self.postMessage({ type: 'result', data, generation: message.generation });
       } finally {
         engine._free(inputPtr);
