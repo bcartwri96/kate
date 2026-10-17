@@ -23,6 +23,7 @@
 ## Review Focus
 
 - Non-local host or missing local-only binding: endpoint must return 404. Pin in Task 1's Node tests.
+- Local hostname with the assets-only config: browser must see `/debug?status=1` as disabled and send no diagnostics. Pin with Task 1's status test and Task 2's local integration check.
 - Malformed event JSON, unsupported methods/content types, and request body over limit: reject with a short 4xx response and do not mutate retained state. Pin in Task 1's Node tests.
 - Audio cap reached mid-session: return an explicit limit error and never present truncated content as a complete WAV. Pin in Task 1's Node tests.
 - Audio segments arriving while transcription results are posted: audio segment order must remain correct and WAV duration/data length must match. Pin with Task 1's ordering/cap tests and Task 2's local integration check.
@@ -48,7 +49,9 @@
 ## Interfaces
 
 - `debug-worker.js` exports `fetch(request, env)`. It routes `/debug` only when `env.DEBUG === "1"` and the request host is a loopback hostname; otherwise it returns 404. Other requests use `env.ASSETS.fetch(request)`.
+- `GET /debug?status=1` returns `{ "enabled": true }` only after the Worker-side local signal and loopback checks pass; the browser additionally checks its own hostname before enabling any uploads.
 - `POST /debug` with `Content-Type: application/json` accepts `{ "type": "event", "event": { ... } }` or `{ "type": "words", "chunk": number, "rms": number, "speech_ratio": number, "vad_kept_ratio": number, "words": [...] }`.
+- It also accepts `{ "type": "incomplete", "reason": string }` to mark a client-capped session. The JSON response returns `incomplete: true` and the WAV endpoint returns 409.
 - `POST /debug?type=audio` with `Content-Type: audio/wav` appends one complete short PCM16 mono WAV segment. The client posts segments sequentially; the Worker validates WAV format/sample rate/channels and joins PCM data for the downloadable full-session WAV.
 - `GET /debug` returns `{ events, words, audio: { available, url, duration_seconds, bytes } }`.
 - `GET /debug?audio=1` returns `audio/wav` and `Content-Disposition: attachment; filename="kate-conversation.wav"`.
@@ -81,7 +84,7 @@ Expected: FAIL because `debug-worker.js` does not yet exist.
 
 Add the Worker module with `DEBUG` and loopback checks; route non-API paths to `env.ASSETS.fetch(request)`.
 
-- [ ] **Step 4: Add failing tests for JSON events/words, invalid JSON, wrong methods, and event/word count limits**
+- [ ] **Step 4: Add failing tests for status, JSON events/words, invalid JSON, wrong methods, and event/word count limits**
 
 Assert valid records appear in GET JSON; malformed, unsupported, and over-limit requests return 4xx and do not exceed caps.
 
@@ -117,7 +120,7 @@ Expected: PASS for gate, routes, body validation, limits, WAV reconstruction, an
 
 - [ ] **Step 1: Add a local-client predicate and event/word upload helper**
 
-Only enable when hostname is `localhost`, `127.0.0.1`, or `::1`; use same-origin fetch. Convert current `logChunkResult` fields into a structured `words` record; post VAD-ready, app error, `window.error`, and `unhandledrejection` records as events. Store timestamp, log level, and message as fields so GET JSON contains the diagnostic console output without routine transcript dumps in the developer console.
+Only enable when hostname is `localhost`, `127.0.0.1`, or `::1` and `GET /debug?status=1` returns `{ "enabled": true }`; use same-origin fetch. Convert current `logChunkResult` fields into a structured `words` record; post VAD-ready, app error, `window.error`, and `unhandledrejection` records as events. Store timestamp, log level, and message as fields so GET JSON contains the diagnostic console output without routine transcript dumps in the developer console.
 
 - [ ] **Step 2: Add a PCM16 WAV encoder for each worklet block**
 
@@ -129,7 +132,7 @@ Forward each accepted `pcm` block to `KateDebug.audio(pcm)` before normal infere
 
 - [ ] **Step 4: Replace console dumps and per-chunk links with API records**
 
-Remove `logChunkResult` console tables, `addAudioClip`, `createChunkAudioUrl`, the recent clip list, and pending audio copies used only for downloads. Preserve user-visible errors and model/microphone status; route diagnostic details to `/debug` only on localhost. Change VAD ready console output in `inference-worker.js` to a `diagnostic` postMessage consumed by the main thread.
+Remove `logChunkResult` console tables, `addAudioClip`, `createChunkAudioUrl`, the recent clip list, and pending audio copies used only for downloads. Preserve user-visible errors and model/microphone status; route diagnostic details to `/debug` only after the hostname check and status probe. Change VAD-ready output in `inference-worker.js` to a `diagnostic` postMessage consumed by the main thread. In local debug mode, route Needle worker console output to diagnostic messages instead of the developer console.
 
 - [ ] **Step 5: Reset local diagnostics with Clear convo and update cache version**
 

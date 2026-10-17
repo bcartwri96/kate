@@ -6,7 +6,7 @@ Provide a local-only diagnostic endpoint for Kate that exposes the captured conv
 
 ## Scope
 
-- Add a small Worker handler for `GET /debug`, `GET /debug?audio=1`, `POST /debug`, and a clear operation associated with clearing the conversation.
+- Add a small Worker handler for `GET /debug?status=1`, `GET /debug`, `GET /debug?audio=1`, `POST /debug`, and a clear operation associated with clearing the conversation.
 - Keep all diagnostic data in memory in the local Wrangler Worker process. Restarting the process clears it.
 - Accept diagnostic events and timed word records from the browser and retain the full captured microphone audio as WAV.
 - Serve JSON containing diagnostic events and word records, and serve the full WAV on the audio query form.
@@ -18,13 +18,17 @@ Provide a local-only diagnostic endpoint for Kate that exposes the captured conv
 
 ### `POST /debug`
 
-Receives diagnostic updates from the app. The request body identifies its record type and contains either structured diagnostic/transcription records or audio bytes. Audio is encoded as WAV in the request so the endpoint stores the exact whole-session recording rather than transient per-chunk object URLs. The handler validates the content type and limits request size; the client may send audio incrementally so a long-running session does not require one unbounded upload.
+Receives diagnostic updates from the app. The request body identifies its record type and contains structured event, words, incomplete-session, or audio data. Audio is encoded as WAV in the request so the endpoint stores the captured pre-inference microphone signal rather than transient per-chunk object URLs. The handler validates the content type and limits request size; the client may send audio incrementally so a long-running session does not require one unbounded upload.
 
-The browser sends data only when the app is running on localhost. The regular deployed app does not send diagnostic data to any remote endpoint.
+The browser sends data only when the app is running on localhost and its status probe confirms the local Wrangler `DEBUG: "1"` signal. The regular deployed app does not send diagnostic data to any remote endpoint.
 
 ### `GET /debug`
 
 Returns JSON with the retained diagnostic event list and recognized words, including each word's start/end time, chunk number, RMS, VAD metadata, and whether it was displayed when those fields are available. The response includes a WAV download URL and indicates whether audio has been captured.
+
+### `GET /debug?status=1`
+
+Returns `{ "enabled": true }` only when the local Wrangler Worker has `DEBUG: "1"` and the request hostname is loopback. The browser probes this endpoint before enabling uploads, in addition to checking its own hostname. The production assets-only configuration returns 404.
 
 ### `GET /debug?audio=1`
 
@@ -38,13 +42,13 @@ Clearing the conversation also clears the local diagnostic records and recording
 
 - Keep normal transcription and microphone capture behavior unchanged.
 - Record a continuous mono WAV representation for the diagnostic endpoint, independent of whether the model emits any words.
-- Send diagnostic events and word decisions to `/debug` only in local development.
+- Send diagnostic events and word decisions to `/debug` only when the browser hostname is loopback and the Worker status probe confirms local debug mode.
 - Remove per-chunk download links and normal-page debug tables/log output. Do not log audio payloads.
 - Retain user-facing errors needed to explain microphone or model failures.
 
 ## Local-only and privacy constraints
 
-- The endpoint must be guarded on the Worker side, not only hidden by the UI. It is enabled only for the local Wrangler development environment and loopback hostnames.
+- The endpoint must be guarded on the Worker side, not only hidden by the UI. It is enabled only when the local Wrangler config supplies `DEBUG: "1"` and the request hostname is loopback.
 - Production configuration must not bind or expose diagnostic storage/handlers. Production requests to `/debug` return 404.
 - Audio and diagnostics stay in process memory; nothing is written to disk or sent to a remote service. The API has no authentication because it is loopback-only and development-only.
 - Cap retained diagnostic events and audio size/duration, returning an explicit error if a limit is reached rather than silently truncating a recording presented as complete.
