@@ -10,9 +10,11 @@ const liveTranscript = document.querySelector('#liveTranscript');
 const transcriptText = document.querySelector('#transcriptText');
 const clearLink = document.querySelector('#clearLink');
 const AUDIO_RATE = 16000;
-const MIN_CHUNK_RMS = 0.015;
 const FAST_CHUNK_SAMPLES = AUDIO_RATE / 2;
 const SAFE_CHUNK_SAMPLES = AUDIO_RATE;
+const DEBUG_HOST = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+const DEBUG_QUEUE_LIMIT = 1024 * 1024;
+let DEBUG_LOCAL = false;
 
 let inferenceWorker;
 let inferenceReady = false;
@@ -25,6 +27,10 @@ let samplesBuffered = 0;
 let streamChunkSamples = FAST_CHUNK_SAMPLES;
 let inferenceBusy = false;
 let nextChunkId = 0;
+let debugQueue = Promise.resolve();
+let pendingDebugAudioBytes = 0;
+let debugAudioStopped = false;
+let debugFailureReported = false;
 let confirmedText = '';
 let pendingText = '';
 let previousWordEnd = null;
@@ -33,6 +39,122 @@ let savedText = loadSavedText();
 let followTranscript = true;
 
 try { localStorage.removeItem('hush-past'); } catch {}
+
+function reportDebugFailure(error) {
+  if (debugFailureReported) return;
+  debugFailureReported = true;
+  console.warn(`[Kate] Local /debug upload failed; transcription continues (${error?.message || 'request failed'}).`);
+}
+
+function enqueueDebug(task) {
+  if (!DEBUG_LOCAL) return Promise.resolve();
+  debugQueue = debugQueue.then(task).catch(reportDebugFailure);
+  return debugQueue;
+}
+
+function postDebugRecord(record) {
+  if (!DEBUG_LOCAL) return;
+  void enqueueDebug(async () => {
+    const response = await fetch('/debug', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  });
+}
+
+function recordDebugEvent(event) {
+  postDebugRecord({ type: 'event', event: { timestamp: new Date().toISOString(), ...event } });
+}
+
+function encodeWavSegment(samples) {
+  const wav = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(wav);
+  const writeAscii = (offset, value) => {
+    for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, AUDIO_RATE, true);
+  view.setUint32(28, AUDIO_RATE * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  return new Blob([wav], { type: 'audio/wav' });
+}
+
+function recordDebugAudio(samples, generation) {
+  if (!DEBUG_LOCAL || debugAudioStopped || generation !== transcriptGeneration) return;
+  const byteLength = 44 + samples.length * 2;
+  if (pendingDebugAudioBytes + byteLength > DEBUG_QUEUE_LIMIT) {
+    debugAudioStopped = true;
+    recordDebugEvent({ level: 'error', message: 'Local debug audio queue exceeded 1 MiB; recording is incomplete.' });
+    postDebugRecord({ type: 'incomplete', reason: 'local audio queue overflow' });
+    return;
+  }
+  const blob = encodeWavSegment(samples);
+  pendingDebugAudioBytes += byteLength;
+  void enqueueDebug(async () => {
+    try {
+      const response = await fetch('/debug?type=audio', { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: blob });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      if (generation === transcriptGeneration) {
+        debugAudioStopped = true;
+        postDebugRecord({ type: 'incomplete', reason: 'local audio upload failed' });
+      }
+      throw error;
+    } finally {
+      if (generation === transcriptGeneration) pendingDebugAudioBytes = Math.max(0, pendingDebugAudioBytes - byteLength);
+    }
+  });
+}
+
+function clearDebugData() {
+  if (!DEBUG_LOCAL) return;
+  pendingDebugAudioBytes = 0;
+  debugAudioStopped = false;
+  debugFailureReported = false;
+  void enqueueDebug(async () => {
+    const response = await fetch('/debug', { method: 'DELETE' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  });
+}
+
+function publishDebugClient() {
+  window.KateDebug = DEBUG_LOCAL ? {
+    event: recordDebugEvent,
+    words: postDebugRecord,
+    audio: recordDebugAudio,
+    clear: clearDebugData
+  } : undefined;
+}
+
+async function detectDebugMode() {
+  DEBUG_LOCAL = false;
+  publishDebugClient();
+  if (!DEBUG_HOST) return;
+  try {
+    const response = await fetch('/debug?status=1', { cache: 'no-store' });
+    if (!response.ok) return;
+    DEBUG_LOCAL = (await response.json()).enabled === true;
+    publishDebugClient();
+  } catch {}
+}
+
+window.addEventListener('error', event => recordDebugEvent({ level: 'error', message: event.message || 'Window error', filename: event.filename, line: event.lineno, column: event.colno }));
+window.addEventListener('unhandledrejection', event => recordDebugEvent({ level: 'error', message: event.reason?.message || String(event.reason || 'Unhandled promise rejection') }));
 
 function updateProgress(loaded, total) {
   if (!total) {
@@ -102,6 +224,7 @@ function clearConversation() {
   } catch {}
   audioNode?.port.postMessage({ type: 'reset', generation: transcriptGeneration });
   if (inferenceReady) inferenceWorker?.postMessage({ type: 'clear' });
+  clearDebugData();
   renderText();
 }
 
@@ -154,7 +277,7 @@ async function ensureModel() {
   loadingText.textContent = 'Loading speech engine...';
   progressFill.classList.add('indeterminate');
   progressFill.style.width = '';
-  inferenceWorker = new Worker('/inference-worker.js');
+  inferenceWorker = new Worker(DEBUG_LOCAL ? '/inference-worker.js?debug=1' : '/inference-worker.js');
   let workerReady = false;
   await new Promise((resolve, reject) => {
     inferenceWorker.onmessage = event => {
@@ -165,10 +288,11 @@ async function ensureModel() {
         if (workerReady) showError(error);
         else reject(error);
       }
+      else if (message.type === 'diagnostic') recordDebugEvent(message.event || message);
       else if (message.type === 'result') {
         inferenceBusy = false;
         if (message.generation === transcriptGeneration) {
-          logChunkWords(message.data);
+          recordChunkResult(message.data);
           appendStreamResult(message.data);
         }
         if (samplesBuffered >= streamChunkSamples) drainAudio();
@@ -184,31 +308,30 @@ async function ensureModel() {
   });
 }
 
-function logChunkWords(data) {
+function recordChunkResult(data) {
   const rms = Number(data.rms) || 0;
-  const displayed = rms >= MIN_CHUNK_RMS;
-  const words = Array.isArray(data.words) && data.words.length
+  const speechPercent = Math.round((Number(data.speech_ratio) || 0) * 100);
+  const keptPercent = Math.round((Number(data.vad_kept_ratio) || 0) * 100);
+  const words = Array.isArray(data.word_decisions)
+    ? data.word_decisions
+    : Array.isArray(data.words)
     ? data.words
-    : data.text ? [{ word: data.text, start: null, end: null }] : [];
-  if (!words.length) return;
-  console.groupCollapsed(`[Kate] chunk ${data.chunk} · RMS ${rms.toFixed(4)} · ${displayed ? 'displayed' : 'filtered'}`);
-  console.table(words.map(item => ({
-    word: item.word,
-    start_seconds: item.start != null && Number.isFinite(Number(item.start)) ? Number(item.start) : '',
-    end_seconds: item.end != null && Number.isFinite(Number(item.end)) ? Number(item.end) : '',
+    : data.text ? [{ word: data.text, start: null, end: null, displayed: true }] : [];
+  const summary = words.length
+    ? `chunk ${data.chunk} · VAD ${speechPercent}% speech, ${keptPercent}% audio passed · RMS ${rms.toFixed(4)}`
+    : `chunk ${data.chunk}: no words; VAD ${speechPercent}% speech, ${keptPercent}% audio passed; RMS ${rms.toFixed(4)}`;
+  recordDebugEvent({ level: words.length ? 'log' : 'info', message: summary });
+  postDebugRecord({
+    type: 'words',
     chunk: data.chunk,
     rms,
-    displayed
-  })));
-  console.groupEnd();
+    speech_ratio: Number(data.speech_ratio) || 0,
+    vad_kept_ratio: Number(data.vad_kept_ratio) || 0,
+    words
+  });
 }
 
 function appendStreamResult(data) {
-  if ((Number(data.rms) || 0) < MIN_CHUNK_RMS) {
-    pendingText = '';
-    renderText();
-    return;
-  }
   if (Array.isArray(data.words) && data.words.length) {
     let additions = '';
     for (const item of data.words) {
@@ -281,6 +404,7 @@ async function startListening() {
     if (event.data?.generation !== transcriptGeneration) return;
     const pcm = event.data?.samples;
     if (!pcm?.length) return;
+    recordDebugAudio(pcm, event.data.generation);
     if (!receivedAudio) {
       receivedAudio = true;
       loadingText.textContent = 'Listening...';
@@ -316,6 +440,7 @@ async function startListening() {
 async function boot() {
   retryButton.hidden = true;
   progressTrack.hidden = false;
+  await detectDebugMode();
   await ensureModel();
   await startListening();
 }
@@ -335,7 +460,7 @@ function stopListening() {
 }
 
 function showError(error) {
-  console.error(error);
+  recordDebugEvent({ level: 'error', message: error?.message || 'Something went wrong.', stack: error?.stack });
   stopListening();
   loadingText.textContent = error?.message || 'Something went wrong. Please try again.';
   progressTrack.hidden = false;

@@ -24,6 +24,7 @@ function createSession() {
 
 async function handleDebugRequest(request, url) {
   if (request.method === 'GET') {
+    if (url.searchParams.get('status') === '1') return jsonResponse({ enabled: true });
     if (url.searchParams.get('audio') === '1') return getAudioResponse();
     return jsonResponse({
       events: session.events,
@@ -62,6 +63,11 @@ async function handleDebugRequest(request, url) {
     return new Response('Malformed JSON.', { status: 400 });
   }
   if (!record || typeof record !== 'object' || Array.isArray(record)) return new Response('Expected a JSON object.', { status: 400 });
+
+  if (record.type === 'incomplete') {
+    session.incomplete = true;
+    return new Response(null, { status: 204 });
+  }
 
   if (record.type === 'event') {
     if (!record.event || typeof record.event !== 'object' || Array.isArray(record.event)) return new Response('Expected an event object.', { status: 400 });

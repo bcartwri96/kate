@@ -50,6 +50,13 @@ test('passes non-debug requests through to static assets', async () => {
   assert.equal(await response.text(), 'asset');
 });
 
+test('reports debug enabled only from the local Worker configuration', async () => {
+  const enabled = await worker.fetch(new Request(localUrl('/debug?status=1')), localEnv);
+  const disabled = await worker.fetch(new Request(localUrl('/debug?status=1')), env(undefined));
+  assert.deepEqual(await enabled.json(), { enabled: true });
+  assert.equal(disabled.status, 404);
+});
+
 test('stores event and timed word records in the JSON response', async () => {
   const event = { timestamp: 123, level: 'info', message: 'VAD ready' };
   const words = { chunk: 7, rms: 0.02, speech_ratio: 0.5, vad_kept_ratio: 0.8, words: [{ word: 'Hi.', start: 1, end: 1.2, displayed: true }] };
@@ -110,6 +117,14 @@ test('DELETE clears diagnostic and audio session state', async () => {
   const data = await (await worker.fetch(new Request(localUrl('/debug')), localEnv)).json();
   assert.equal(data.events.length, 0);
   assert.equal(data.incomplete, false);
+});
+
+test('marks audio incomplete when the client reports an upload queue overflow', async () => {
+  const response = await worker.fetch(new Request(localUrl('/debug'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'incomplete', reason: 'local audio queue overflow' }) }), localEnv);
+  assert.equal(response.status, 204);
+  const data = await (await worker.fetch(new Request(localUrl('/debug')), localEnv)).json();
+  assert.equal(data.incomplete, true);
+  assert.equal((await worker.fetch(new Request(localUrl('/debug?audio=1')), localEnv)).status, 409);
 });
 
 test('concatenates valid WAV segments into a downloadable whole-session WAV', async () => {

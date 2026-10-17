@@ -1,10 +1,14 @@
-const CACHE='hush-shell-v15';
-const SHELL=['/','/index.html','/styles.css','/app.js','/inference-worker.js','/manifest.webmanifest'];
+const CACHE='hush-shell-v22';
+const SHELL=['/','/index.html','/styles.css','/app.js','/audio-worklet.js','/inference-worker.js','/vad/fvad.js','/manifest.webmanifest'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('hush-shell-')&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',event=>{
   const url=new URL(event.request.url);
   if(event.request.method!=='GET'||url.origin!==location.origin)return;
+  if(url.pathname==='/debug'||url.pathname.startsWith('/debug/')){
+    event.respondWith(fetch(event.request,{cache:'no-store'}));
+    return;
+  }
   if(url.pathname.startsWith('/needle/')){
     event.respondWith(fetch(event.request,{cache:'no-store'}));
     return;
