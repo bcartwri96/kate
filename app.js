@@ -12,7 +12,7 @@ const clearLink = document.querySelector('#clearLink');
 const AUDIO_RATE = 16000;
 const FAST_CHUNK_SAMPLES = AUDIO_RATE / 2;
 const SAFE_CHUNK_SAMPLES = AUDIO_RATE;
-const DEBUG_HOST = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+const DEBUG_HOST = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
 const DEBUG_QUEUE_LIMIT = 1024 * 1024;
 let DEBUG_LOCAL = false;
 

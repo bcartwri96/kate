@@ -185,5 +185,5 @@ function jsonResponse(data) {
 }
 
 function isLoopback(hostname) {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
 }

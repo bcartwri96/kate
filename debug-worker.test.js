@@ -57,6 +57,11 @@ test('reports debug enabled only from the local Worker configuration', async () 
   assert.equal(disabled.status, 404);
 });
 
+test('allows IPv6 loopback when the local Wrangler DEBUG signal is enabled', async () => {
+  const response = await worker.fetch(new Request('http://[::1]/debug?status=1'), localEnv);
+  assert.deepEqual(await response.json(), { enabled: true });
+});
+
 test('stores event and timed word records in the JSON response', async () => {
   const event = { timestamp: 123, level: 'info', message: 'VAD ready' };
   const words = { chunk: 7, rms: 0.02, speech_ratio: 0.5, vad_kept_ratio: 0.8, words: [{ word: 'Hi.', start: 1, end: 1.2, displayed: true }] };
