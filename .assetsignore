@@ -7,4 +7,7 @@ package-lock.json
 README.md
 LICENSE
 wrangler.jsonc
+wrangler.dev.jsonc
+debug-worker.js
+debug-worker.test.js
 *.py

@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kate-local-debug",
+  "main": "debug-worker.js",
+  "compatibility_date": "2026-10-13",
+  "vars": {
+    "DEBUG": "1"
+  },
+  "assets": {
+    "directory": ".",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/debug", "/debug/*"],
+    "html_handling": "auto-trailing-slash"
+  }
+}
