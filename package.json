@@ -5,7 +5,7 @@
   "scripts": {
     "setup:needle": "python3 scripts/fetch-needle-wasm.py",
     "dev": "wrangler dev",
-    "dev:debug": "wrangler dev --config wrangler.dev.jsonc",
+    "dev:debug": "wrangler dev --config wrangler.dev.jsonc --port 8791 --persist-to .wrangler/debug-state",
     "test": "node --test",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types"

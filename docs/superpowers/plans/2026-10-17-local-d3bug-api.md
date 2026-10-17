@@ -102,7 +102,7 @@ Validate RIFF/WAVE, PCM format 1, mono, 16 kHz, 16-bit samples. Retain segment P
 
 - [ ] **Step 8: Configure a dedicated local Wrangler Worker and scripts**
 
-`wrangler.dev.jsonc` uses `main: "debug-worker.js"`, existing static assets with binding `ASSETS`, worker-first routing for `"/debug"` and `"/debug/*"`, and `DEBUG: "1"`. Add `npm run dev:debug` and `npm test`. Exclude `debug-worker.js` and `wrangler.dev.jsonc` from deployed assets. In `wrangler.jsonc`, set `not_found_handling` to `"none"`; keep it assets-only and leave out `DEBUG`.
+`wrangler.dev.jsonc` uses `main: "debug-worker.js"`, existing static assets with binding `ASSETS`, worker-first routing for `"/debug"` and `"/debug/*"`, and `DEBUG: "1"`. Define `dev:debug` as `wrangler dev --config wrangler.dev.jsonc --port 8791 --persist-to .wrangler/debug-state` and define `test` as `node --test`. Exclude `debug-worker.js` and `wrangler.dev.jsonc` from deployed assets. In `wrangler.jsonc`, set `not_found_handling` to `"none"`; keep it assets-only and leave out `DEBUG`.
 
 - [ ] **Step 9: Run Worker tests and verify config shape**
 
