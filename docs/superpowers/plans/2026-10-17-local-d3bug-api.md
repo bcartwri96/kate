@@ -19,6 +19,7 @@
 - “Cap retained diagnostic events and audio size/duration, returning an explicit error if a limit is reached rather than silently truncating a recording presented as complete.”
 - “Push source changes via Git after implementation; do not publish using `wrangler deploy`.”
 - Use the existing 16 kHz mono microphone samples; do not alter transcription/VAD tuning or introduce dependencies.
+- Include the vendored `vad/fvad.js` runtime and `vad/THIRD_PARTY_NOTICES.md`; the browser imports this runtime and setup does not regenerate it. Do not include Whistle model weights.
 
 ## Review Focus
 
@@ -167,11 +168,12 @@ Run `npm test`. Start the local debug Worker and verify app shell/assets load, `
 ### Task 4: Review and push the source change
 
 **Files:**
-- Review tracked changes only; do not include `.wrangler/`, `node_modules/`, model binaries, or local capture data.
+- Create: `vad/fvad.js` and `vad/THIRD_PARTY_NOTICES.md` only if they are absent from the Git tree; they are the required vendored WebRTC VAD runtime and license notice.
+- Review tracked changes only; do not include `.wrangler/`, `node_modules/`, Whistle model weights, or local capture data.
 
 - [ ] **Step 1: Review the final diff and repository status**
 
-Run `git diff --check`, inspect the full staged diff, and confirm the local debug config and API tests are intentional source files.
+Run `git diff --check`, inspect the full staged diff, and confirm the local debug config/API tests and vendored VAD runtime/license notice are intentional source files. Confirm `.wrangler/`, `node_modules/`, and `needle/whistle.cact` are not staged.
 
 - [ ] **Step 2: Commit the implementation**
 
